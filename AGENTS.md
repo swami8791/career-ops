@@ -444,3 +444,53 @@ One TSV file per evaluation at `batch/tracker-additions/{num}-{company-slug}.tsv
 - No markdown bold (`**`) in status field
 - No dates in status field (use the date column)
 - No extra text (use the notes column)
+
+## Cursor Cloud specific instructions
+
+This repo is **CLI-first** (Node `.mjs` scripts + markdown/YAML data). There is no always-on backend server except the optional alpha web UI.
+
+### Dependency refresh (automatic on VM startup)
+
+The update script runs `npm install --ignore-scripts` at the repo root and `npm install` in `web/`. This matches CI and avoids the root `postinstall` Playwright `--with-deps` step racing with `apt` during parallel installs.
+
+Install Playwright Chromium **once per VM** when you need PDF generation, browser extract, liveness checks, or CV visual tests:
+
+```bash
+npx playwright install chromium
+```
+
+For CV visual regression (CI parity), also install system packages: `fonts-noto-cjk poppler-utils`.
+
+### Verify the environment
+
+| Check | Command |
+|-------|---------|
+| Quick test suite (CI gate) | `node test-all.mjs --quick` |
+| Go dashboard tests | `cd dashboard && go test ./...` |
+| Web unit tests + typecheck | `cd web && npm test && npm run typecheck` |
+| Setup health | `npm run doctor` |
+
+There is no ESLint at the repo root; linting is enforced through `test-all.mjs` and the web TypeScript checker.
+
+### Running services
+
+| Service | Command | Notes |
+|---------|---------|-------|
+| Web UI (alpha) | `cd web && npm run dev` | http://localhost:3000 — reads parent checkout by default; set `CAREER_OPS_ROOT` in `web/.env.local` to point elsewhere |
+| Dashboard TUI | `npm run serve:dashboard` | Terminal UI, no TCP port |
+| Core CLI scripts | `node scan.mjs`, `node generate-pdf.mjs`, etc. | See `docs/SETUP.md` |
+
+Use **tmux** for long-running dev servers. The web app requires **Node ≥ 22** (`web/package.json` engines).
+
+### End-user install path
+
+New workspaces: `npx @santifer/career-ops init` (clones latest release + `npm install`). When developing **in this repo**, use `git clone` + the commands above instead.
+
+### Hello-world smoke tests (no AI keys required)
+
+1. `npm run doctor` — confirms Node, deps, Playwright
+2. `node scan.mjs --dry-run --company Anthropic --quiet` — live portal fetch, no writes
+3. Build + render a PDF: `node build-cv-html.mjs <payload.json> output/demo/cv.html` then `node generate-pdf.mjs output/demo/cv.html output/demo/cv.pdf` (paths must stay inside the repo root)
+4. `cd web && npm run dev` — open http://localhost:3000 (Pipeline, CV, Explore, Config)
+
+Full agentic eval/apply flows need an AI coding CLI or API keys (`.env.example`); they are optional for environment verification.
