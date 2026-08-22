@@ -10,8 +10,17 @@ name: Nehal (resume-gate)
        slot carries it and was moved ahead of education.
     2. Core Competencies is deleted — it duplicates Skills for six lines of no signal.
     3. Type floor: .project-badge raised 9px -> 9.5px, and .job li raised 10.5px ->
-       var(--font-size) (11px). Bullets are the most-read text on the page and had
+       var(--font-size). Bullets are the most-read text on the page and had
        been rendering smaller than the body default.
+    4. --font-size raised 11px -> 12.5px (2026-08-21). Measured, not guessed. At
+       11px page 2 was 64% full; 12px fits with nothing dropped at 78%; 12.5px
+       fits with nothing dropped at 82%. 13px overflows to three pages and only
+       recovers by dropping the SELECTED PROJECTS card (A6 step 1), which carries
+       the NCT trial registration — a bad trade for half a pixel, so 12.5px is
+       the ceiling. Previous version at data/backups/cv-template.nehal.*.11px.bak.
+       Keep parseArgs' bodyFloor default in validate.mjs equal to this value: a
+       default below what the template renders asserts a floor that cannot fail,
+       which is the same silent-green class of bug as the old tag-only B15 check.
   Rendered through resume-gate/validate.mjs, which asserts all four.
 -->
 <html lang="{{LANG}}">
@@ -26,7 +35,7 @@ name: Nehal (resume-gate)
   :root {
     --accent-color: hsl(187 74% 32%);
     --font-family: "Liberation Sans", 'Helvetica Neue', Arial, 'DejaVu Sans', sans-serif;
-    --font-size: 11px;
+    --font-size: 12.5px;
     /* Matches generate-pdf.mjs's PDF_PAGE_MARGIN — the actual PDF page margin
        comes from the later @page rule injectPrintPageCss appends (which reads
        this same variable), so this default must match it exactly. */

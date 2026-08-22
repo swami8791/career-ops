@@ -16,6 +16,12 @@
  * Options:
  *   --payload=<path>    CV JSON payload (the build-cv-html.mjs input).      required
  *   --company=<name>    Names the output Nehal-Swami-Resume-<Company>.pdf.  required
+ *   --report=<NNN>      Tracker/report number. Forwarded to generate-pdf.mjs so
+ *                       the data/pdf-index.tsv row is keyed, which is the only
+ *                       way merge-tracker.mjs can flip that row's PDF column to
+ *                       ✅. Without it the manifest row is written unkeyed and
+ *                       the tracker silently keeps showing ❌ for a PDF that
+ *                       exists on disk.
  *   --jd=<path>         JD token list, one per line, for the match count.
  *   --out=<dir>         Output directory (default: output).
  *   --format=<fmt>      letter | a4 (default: letter).
@@ -28,7 +34,7 @@
  * Exit codes: 0 clean (soft fails allowed), 1 hard fail, 2 bad invocation.
  */
 
-import { readFileSync, existsSync, mkdirSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import { spawnSync } from 'child_process';
 import { resolve, dirname, join } from 'path';
 import { fileURLToPath } from 'url';
@@ -303,6 +309,16 @@ const PAGE_PROBE = `(${function probe(opts) {
 
   const forbidden = {
     tables: document.querySelectorAll('table').length,
+    // Tag-name alone is not the rule. The reason tables are banned is that a
+    // tabular *layout* can scramble PDF text-extraction order, and CSS
+    // display:table reproduces the layout with no <table> tag anywhere — so a
+    // tag-only check reports "no tables" on a page built entirely out of them.
+    // Counted separately from `tables` because the risk is lower (no row/col
+    // semantics for a parser to misread) and this is a soft signal, not a fail.
+    cssTables: [...document.querySelectorAll('body *')].filter((el) => {
+      const d = getComputedStyle(el).display;
+      return d === 'table' || d === 'table-row' || d === 'table-cell';
+    }).length,
     images: document.querySelectorAll('img').length,
     multicol: [...document.querySelectorAll('body *')].filter((el) => {
       const cs = getComputedStyle(el);
@@ -369,6 +385,9 @@ async function renderChecks(htmlPath, { format, marginIn, bodyFloor, smallFloor 
 
     // B15 — static format assertions.
     if (probe.forbidden.tables) report.fail('B15', `${probe.forbidden.tables} <table> element(s) in the DOM`);
+    if (probe.forbidden.cssTables) {
+      report.warn('B15', `${probe.forbidden.cssTables} element(s) using CSS display:table* (no <table> tag, but a tabular layout — currently the awards/publications and certifications rows)`);
+    }
     if (probe.forbidden.images) report.fail('B15', `${probe.forbidden.images} <img> element(s) in the DOM`);
     if (probe.forbidden.multicol) report.fail('B15', `${probe.forbidden.multicol} multi-column element(s)`);
     for (const g of probe.badGlyphs) report.fail('B15', `non-standard bullet glyph: "${g}"`);
@@ -389,13 +408,16 @@ function run(cmd, args, opts = {}) {
 
 function parseArgs(argv) {
   const out = {
-    payload: '', company: '', jd: '', outDir: 'output', format: 'letter',
+    payload: '', company: '', report: '', jd: '', outDir: 'output', format: 'letter',
     staticOnly: false, allowReorder: false, json: false,
-    bodyFloor: 11, smallFloor: 9.5,
+    // Tracks --font-size in cv-template.nehal.html. A default below what the
+    // template actually renders is a floor that can never fail.
+    bodyFloor: 12.5, smallFloor: 9.5,
   };
   for (const a of argv) {
     if (a.startsWith('--payload=')) out.payload = a.slice(10);
     else if (a.startsWith('--company=')) out.company = a.slice(10);
+    else if (a.startsWith('--report=')) out.report = a.slice(9).trim();
     else if (a.startsWith('--jd=')) out.jd = a.slice(5);
     else if (a.startsWith('--out=')) out.outDir = a.slice(6);
     else if (a.startsWith('--format=')) out.format = a.slice(9);
@@ -449,6 +471,11 @@ async function main() {
   const { report, stats } = staticChecks(payload, { templateHtml, jdTokens });
   const hard = [...report.hard];
   const soft = [...report.soft];
+  // Surfaced rather than silent: an unkeyed manifest row leaves the tracker
+  // showing ❌ next to a PDF that exists, which reads as "not built yet".
+  if (!opt.staticOnly && !opt.report) {
+    soft.push('B13 no --report=NNN given; data/pdf-index.tsv row will be unkeyed and merge-tracker.mjs cannot set the PDF flag');
+  }
   let outputPath = '';
 
   if (!opt.staticOnly && hard.length === 0) {
@@ -464,6 +491,17 @@ async function main() {
     if (build.status !== 0) {
       hard.push(`BUILD build-cv-html.mjs failed: ${(build.stderr || build.stdout || '').trim().split('\n').slice(-3).join(' ')}`);
     } else {
+      // Strip HTML comments from the built output before anything reads it.
+      // The template header documents its own divergences and cites measured
+      // page-fill percentages; those survive the build into the output HTML,
+      // where verify-cv-facts reads them as resume metrics with no digest
+      // backing and B11 hard-fails on the template's own changelog. Comments
+      // never render, so nothing visual changes — but they do travel with the
+      // file, and an HTML resume should not ship internal notes to a recruiter.
+      const built = readFileSync(htmlPath, 'utf-8');
+      const stripped = built.replace(/<!--[\s\S]*?-->/g, '');
+      if (stripped !== built) writeFileSync(htmlPath, stripped);
+
       // B11 — facts, against cv.md + article-digest.md.
       const { verifyFacts } = await import(resolve(ROOT, 'verify-cv-facts.mjs'));
       const facts = verifyFacts(readFileSync(htmlPath, 'utf-8'), { cwd: ROOT });
@@ -485,6 +523,8 @@ async function main() {
         // B13 — strict page budget. A third page throws instead of warning.
         const pdfArgs = ['generate-pdf.mjs', htmlPath, pdfPath, `--format=${opt.format}`,
           `--max-pages=${LIMITS.maxPages}`, '--strict-pages'];
+        // Keys the data/pdf-index.tsv row so merge-tracker.mjs can sync the ✅.
+        if (opt.report) pdfArgs.push(`--report=${opt.report}`);
         if (opt.allowReorder) pdfArgs.push('--allow-reorder');
         const pdf = run('node', pdfArgs);
         const printed = `${pdf.stdout || ''}${pdf.stderr || ''}`;
